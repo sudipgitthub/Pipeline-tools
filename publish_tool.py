@@ -148,7 +148,6 @@ class SelectedNodesUI(QtWidgets.QWidget):
         self.version_number_combo.setMinimumHeight(24)
         self.version_number_combo.setMinimumWidth(198)
         self.version_number_combo.setStyleSheet("background-color: #339933; border-radius: 5px; font-weight: bold;")
-    
         self.layout.addLayout(version_layout)
 
         # Selected file format label
