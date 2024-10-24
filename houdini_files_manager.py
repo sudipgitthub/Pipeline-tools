@@ -240,6 +240,7 @@ class SimpleUI(QtWidgets.QWidget):
         
         """
         self.setStyleSheet(dark_theme)    
+    
     def get_username(self):
         # Retrieve the current username
         username = os.getlogin()
