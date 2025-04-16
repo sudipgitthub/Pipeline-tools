@@ -1,0 +1,70 @@
+import hou
+import os
+import json
+
+# Function to collect selected node data (no recursion)
+def collect_node_data(node):
+    data = {
+        "name": node.name(),
+        "path": node.path(),
+        "type": node.type().name(),
+        "parameters": {},
+        "connections": {
+            "inputs": [],
+            "outputs": []
+        }
+    }
+
+    # Collect parameters
+    for parm in node.parms():
+        try:
+            val = parm.eval()
+            if isinstance(val, (int, float, str)):
+                data["parameters"][parm.name()] = val
+        except:
+            data["parameters"][parm.name()] = None
+
+    # Inputs
+    for i in range(len(node.inputs())):
+        input_node = node.input(i)
+        if input_node:
+            data["connections"]["inputs"].append({
+                "input_index": i,
+                "node_name": input_node.name(),
+                "node_path": input_node.path()
+            })
+
+    # Outputs
+    for output_node in node.outputs():
+        data["connections"]["outputs"].append({
+            "node_name": output_node.name(),
+            "node_path": output_node.path()
+        })
+
+    return data
+
+# Get selected nodes
+selected_nodes = hou.selectedNodes()
+if not selected_nodes:
+    raise Exception("No nodes selected!")
+
+# Ask user for file name
+file_name = hou.ui.readInput("Enter a file name (without extension):", buttons=("OK", "Cancel"))[1]
+if not file_name:
+    raise Exception("Operation canceled by user.")
+
+# Save directory
+directory = r"\\spdata\10_TEMP\Sudip\data"
+if not os.path.exists(directory):
+    os.makedirs(directory)
+
+file_path = os.path.join(directory, file_name + ".json")
+
+# Collect data from selected nodes only (flat list)
+all_node_data = [collect_node_data(node) for node in selected_nodes]
+
+# Write to JSON
+with open(file_path, "w") as f:
+    json.dump(all_node_data, f, indent=4)
+
+hou.ui.displayMessage(f"Exported {len(selected_nodes)} nodes with connections to:\n{file_path}")
