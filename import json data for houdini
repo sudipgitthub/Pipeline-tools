@@ -13,55 +13,119 @@ file_path = hou.ui.selectFile(
 if not file_path or not os.path.exists(file_path):
     raise Exception("Invalid file selected.")
 
-# Load node data from JSON
+# Load node data
 with open(file_path, "r") as f:
     node_data = json.load(f)
 
-# Get current parent network
+# Get parent network
 parent = hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor).pwd()
 
-# Track created nodes by path
+# Track created nodes
 created_nodes = {}
 created_node_list = []
 
-# Create nodes first
-for data in node_data:
+def create_node_recursively(data, parent):
     if parent.isLockedHDA():
-        hou.ui.displayMessage(f"Cannot create node '{data['name']}' inside locked asset: {parent.path()}")
-        continue
+        return None
 
     try:
         node = parent.createNode(data["type"], node_name=data["name"])
     except hou.OperationFailed:
-        node = parent.createNode(data["type"])  # fallback if name is invalid
-
-    # Set parameters
-    for parm_name, value in data.get("parameters", {}).items():
-        try:
-            parm = node.parm(parm_name)
-            if parm is not None and value is not None:
-                parm.set(value)
-        except:
-            pass
+        node = parent.createNode(data["type"])
 
     created_nodes[data["path"]] = node
     created_node_list.append(node)
 
-# Reconnect nodes using stored connections
-for data in node_data:
-    this_node = created_nodes.get(data["path"])
-    if not this_node:
-        continue
+    # Set parameter values
+    for parm_name, value in data.get("parameters", {}).items():
+        try:
+            parm = node.parm(parm_name)
+            if parm and value is not None:
+                parm.set(value)
+        except:
+            pass
+
+    # Set expressions
+    for pname, expr_data in data.get("expressions", {}).items():
+        try:
+            parm = node.parm(pname)
+            if parm:
+                lang = hou.exprLanguage.Python if expr_data.get("language") == "python" else hou.exprLanguage.Hscript
+                parm.setExpression(expr_data["expr"], language=lang)
+        except:
+            pass
+
+    # Set keyframes
+    for pname, keys in data.get("keyframes", {}).items():
+        try:
+            parm = node.parm(pname)
+            if parm:
+                keyframes = [hou.Keyframe(value=k["value"], frame=k["frame"]) for k in keys]
+                parm.setKeyframes(keyframes)
+        except:
+            pass
+
+    # Set channel references
+    for pname, ref_data in data.get("channel_references", {}).items():
+        try:
+            parm = node.parm(pname)
+            if parm:
+                target_path = ref_data["referenced_path"]
+                if target_path in created_nodes:
+                    rel_path = node.relativePathTo(created_nodes[target_path])
+                    parm.set(f'ch("{rel_path}/{ref_data["referenced_parm"]}")')
+        except:
+            pass
+
+    # Restore UI metadata
+    ui = data.get("ui_data", {})
+    try:
+        node.setPosition(hou.Vector2(ui.get("xform", [0, 0])))
+        node.setColor(hou.Color(ui.get("color", [1, 1, 1])))
+        node.setComment(ui.get("comment", ""))
+        node.setSelected(ui.get("selected", False))
+        node.bypass(ui.get("bypass_flag", False))
+        if "display_flag" in ui and ui["display_flag"] is not None and hasattr(node, "setDisplayFlag"):
+            node.setDisplayFlag(ui["display_flag"])
+        if "render_flag" in ui and ui["render_flag"] is not None and hasattr(node, "setRenderFlag"):
+            node.setRenderFlag(ui["render_flag"])
+    except:
+        pass
+
+    # Recursively create children
+    for child_data in data.get("children", []):
+        create_node_recursively(child_data, node)
+
+    return node
+
+# Create nodes
+for root_data in node_data:
+    create_node_recursively(root_data, parent)
+
+# Reconnect inputs
+def reconnect(data):
+    node = created_nodes.get(data["path"])
+    if not node:
+        return
 
     for conn in data.get("connections", {}).get("inputs", []):
         input_index = conn["input_index"]
         input_node = created_nodes.get(conn["node_path"])
         if input_node:
             try:
-                this_node.setInput(input_index, input_node)
+                node.setInput(input_index, input_node)
             except:
                 pass
 
-# Layout and finish
-parent.layoutChildren()
-hou.ui.displayMessage(f"Imported {len(created_node_list)} nodes with connections from:\n{file_path}")
+    for child in data.get("children", []):
+        reconnect(child)
+
+for root_data in node_data:
+    reconnect(root_data)
+
+# ✅ Layout only top-level nodes (those directly under the import parent)
+top_level_nodes = [n for n in created_node_list if n.parent() == parent]
+if top_level_nodes:
+    parent.layoutChildren(top_level_nodes)
+
+hou.ui.displayMessage(f"Imported {len(created_node_list)} nodes from:\n{file_path}")
