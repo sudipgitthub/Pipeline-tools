@@ -1,0 +1,67 @@
+import hou
+import os
+import json
+
+# Ask user to select file
+file_path = hou.ui.selectFile(
+    title="Select Node Data File",
+    file_type=hou.fileType.Any,
+    pattern="*.json",
+    chooser_mode=hou.fileChooserMode.Read
+)
+
+if not file_path or not os.path.exists(file_path):
+    raise Exception("Invalid file selected.")
+
+# Load node data from JSON
+with open(file_path, "r") as f:
+    node_data = json.load(f)
+
+# Get current parent network
+parent = hou.ui.paneTabOfType(hou.paneTabType.NetworkEditor).pwd()
+
+# Track created nodes by path
+created_nodes = {}
+created_node_list = []
+
+# Create nodes first
+for data in node_data:
+    if parent.isLockedHDA():
+        hou.ui.displayMessage(f"Cannot create node '{data['name']}' inside locked asset: {parent.path()}")
+        continue
+
+    try:
+        node = parent.createNode(data["type"], node_name=data["name"])
+    except hou.OperationFailed:
+        node = parent.createNode(data["type"])  # fallback if name is invalid
+
+    # Set parameters
+    for parm_name, value in data.get("parameters", {}).items():
+        try:
+            parm = node.parm(parm_name)
+            if parm is not None and value is not None:
+                parm.set(value)
+        except:
+            pass
+
+    created_nodes[data["path"]] = node
+    created_node_list.append(node)
+
+# Reconnect nodes using stored connections
+for data in node_data:
+    this_node = created_nodes.get(data["path"])
+    if not this_node:
+        continue
+
+    for conn in data.get("connections", {}).get("inputs", []):
+        input_index = conn["input_index"]
+        input_node = created_nodes.get(conn["node_path"])
+        if input_node:
+            try:
+                this_node.setInput(input_index, input_node)
+            except:
+                pass
+
+# Layout and finish
+parent.layoutChildren()
+hou.ui.displayMessage(f"Imported {len(created_node_list)} nodes with connections from:\n{file_path}")
