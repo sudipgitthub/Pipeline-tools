@@ -2,31 +2,69 @@ import hou
 import os
 import json
 
-# Function to collect selected node data (no recursion)
+# Function to recursively collect node data
 def collect_node_data(node):
     data = {
         "name": node.name(),
         "path": node.path(),
         "type": node.type().name(),
         "parameters": {},
+        "channel_references": {},
+        "expressions": {},
+        "keyframes": {},
         "connections": {
             "inputs": [],
             "outputs": []
-        }
+        },
+        "ui_data": {},
+        "children": []
     }
 
-    # Collect parameters
+    # Parameters, references, expressions, and keyframes
     for parm in node.parms():
+        pname = parm.name()
+
+        # Parameter value
         try:
             val = parm.eval()
             if isinstance(val, (int, float, str)):
-                data["parameters"][parm.name()] = val
+                data["parameters"][pname] = val
         except:
-            data["parameters"][parm.name()] = None
+            data["parameters"][pname] = None
 
-    # Inputs
-    for i in range(len(node.inputs())):
-        input_node = node.input(i)
+        # Channel reference
+        try:
+            ref = parm.getReferencedParm()
+            if ref and ref != parm:
+                data["channel_references"][pname] = {
+                    "referenced_parm": ref.name(),
+                    "referenced_path": ref.path()
+                }
+        except:
+            pass
+
+        # Expression
+        try:
+            if parm.expression():
+                data["expressions"][pname] = {
+                    "expr": parm.expression(),
+                    "language": "python" if parm.expressionLanguage() == hou.exprLanguage.Python else "hscript"
+                }
+        except:
+            pass
+
+        # Keyframes
+        try:
+            keys = parm.keyframes()
+            if keys:
+                data["keyframes"][pname] = [
+                    {"frame": k.frame(), "value": k.value()} for k in keys
+                ]
+        except:
+            pass
+
+    # Connections - Inputs
+    for i, input_node in enumerate(node.inputs()):
         if input_node:
             data["connections"]["inputs"].append({
                 "input_index": i,
@@ -34,37 +72,61 @@ def collect_node_data(node):
                 "node_path": input_node.path()
             })
 
-    # Outputs
+    # Connections - Outputs
     for output_node in node.outputs():
         data["connections"]["outputs"].append({
             "node_name": output_node.name(),
             "node_path": output_node.path()
         })
 
+    # UI metadata (safely handle flags per node type)
+    ui_data = {
+        "color": list(node.color().rgb()),
+        "selected": node.isSelected(),
+        "comment": node.comment(),
+        "bypass_flag": node.isBypassed(),
+        "xform": list(node.position())
+    }
+
+    if hasattr(node, "isDisplayFlagSet"):
+        ui_data["display_flag"] = node.isDisplayFlagSet()
+    else:
+        ui_data["display_flag"] = None
+
+    if hasattr(node, "isRenderFlagSet"):
+        ui_data["render_flag"] = node.isRenderFlagSet()
+    else:
+        ui_data["render_flag"] = None
+
+    data["ui_data"] = ui_data
+
+    # Recursively collect children
+    for child in node.children():
+        data["children"].append(collect_node_data(child))
+
     return data
 
-# Get selected nodes
+# Get selected root nodes
 selected_nodes = hou.selectedNodes()
 if not selected_nodes:
     raise Exception("No nodes selected!")
 
-# Ask user for file name
+# Ask for file name
 file_name = hou.ui.readInput("Enter a file name (without extension):", buttons=("OK", "Cancel"))[1]
 if not file_name:
     raise Exception("Operation canceled by user.")
 
-# Save directory
-directory = r"\\spdata\10_TEMP\Sudip\data"
-if not os.path.exists(directory):
-    os.makedirs(directory)
-
+# Save path
+directory = r"E:\data"  # Change to your desired path
+os.makedirs(directory, exist_ok=True)
 file_path = os.path.join(directory, file_name + ".json")
 
-# Collect data from selected nodes only (flat list)
+# Collect data from all selected root nodes
 all_node_data = [collect_node_data(node) for node in selected_nodes]
 
 # Write to JSON
 with open(file_path, "w") as f:
     json.dump(all_node_data, f, indent=4)
 
-hou.ui.displayMessage(f"Exported {len(selected_nodes)} nodes with connections to:\n{file_path}")
+hou.ui.displayMessage(f"Node hierarchy and data exported to:\n{file_path}")
+
